@@ -24,6 +24,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 /**
  * ============================================================
@@ -88,9 +90,18 @@ class MainActivity : ComponentActivity() {
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
         btnParams.gravity = Gravity.TOP or Gravity.END
-        btnParams.topMargin = 40
         btnParams.rightMargin = 20
         root.addView(settingsBtn, btnParams)
+
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val params = settingsBtn.layoutParams as FrameLayout.LayoutParams
+            params.topMargin = bars.top + 12
+            settingsBtn.layoutParams = params
+            webView.setPadding(0, 0, 0, bars.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
 
         setContentView(root)
 
@@ -110,6 +121,7 @@ class MainActivity : ComponentActivity() {
         settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
+        settings.textZoom = 100
 
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) {
