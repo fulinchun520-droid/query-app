@@ -2,15 +2,24 @@ package com.mfg.snquery
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.AlertDialog
+import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.net.http.SslError
 import android.os.Bundle
+import android.text.InputType
+import android.view.Gravity
 import android.view.KeyEvent
+import android.view.ViewGroup
 import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.core.app.ActivityCompat
@@ -18,16 +27,32 @@ import androidx.core.content.ContextCompat
 
 /**
  * ============================================================
- *  設定區 —— 之後換伺服器 IP / 網址，只要改這裡就好
+ *  設定區
  * ============================================================
+ *  伺服器 IP 現在存在手機本機（SharedPreferences），
+ *  不用改程式碼重新編譯 —— 開 App 點右上角 ⚙ 就能改。
+ *  這裡的值只在「手機上還沒設定過」時，當作第一次的預設值。
  */
 object AppConfig {
-    // App 開啟後預設載入的網址
-    const val START_URL = "https://10.41.40.38:8091/sn_query"
+    const val DEFAULT_IP = "10.41.40.38"
+    const val HTTPS_PORT = "8091"
+    const val PAGE_PATH = "/sn_query"
 
-    // 只信任這個 host 的 SSL 憑證錯誤（自簽憑證用）。
-    // 其他任何網域一律照正常安全規則處理，不會被放行。
-    const val TRUSTED_HOST = "10.41.40.38"
+    private const val PREFS_NAME = "sn_query_prefs"
+    private const val KEY_SERVER_IP = "server_ip"
+
+    fun getServerIp(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_SERVER_IP, DEFAULT_IP) ?: DEFAULT_IP
+    }
+
+    fun setServerIp(context: Context, ip: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_SERVER_IP, ip.trim()).apply()
+    }
+
+    fun buildUrl(context: Context): String =
+        "https://${getServerIp(context)}:$HTTPS_PORT$PAGE_PATH"
 }
 
 class MainActivity : ComponentActivity() {
@@ -40,9 +65,35 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         webView = WebView(this)
-        setContentView(webView)
 
-        // 先跟系統要相機權限（Android 6+ 需要 runtime permission）
+        val root = FrameLayout(this)
+        root.addView(
+            webView,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        val settingsBtn = TextView(this).apply {
+            text = "⚙"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#66000000"))
+            setPadding(24, 12, 24, 12)
+            setOnClickListener { showServerSettingDialog() }
+        }
+        val btnParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        btnParams.gravity = Gravity.TOP or Gravity.END
+        btnParams.topMargin = 40
+        btnParams.rightMargin = 20
+        root.addView(settingsBtn, btnParams)
+
+        setContentView(root)
+
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED
         ) {
@@ -60,18 +111,12 @@ class MainActivity : ComponentActivity() {
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
 
-        // ── 相機/麥克風權限：網頁呼叫 getUserMedia 時，App 直接放行 ──
-        // (瀏覽器版本卡很久的相機權限問題，在原生 App 裡自己控制就不會卡)
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) {
-                runOnUiThread {
-                    request.grant(request.resources)
-                }
+                runOnUiThread { request.grant(request.resources) }
             }
         }
 
-        // ── SSL 憑證處理：只信任 AppConfig.TRUSTED_HOST 這個網域的自簽憑證 ──
-        // 其餘網域一律走正常憑證驗證流程，不會被放行。
         webView.webViewClient = object : WebViewClient() {
             override fun onReceivedSslError(
                 view: WebView,
@@ -79,10 +124,10 @@ class MainActivity : ComponentActivity() {
                 error: SslError
             ) {
                 val host = error.url?.let { android.net.Uri.parse(it).host } ?: ""
-                if (host == AppConfig.TRUSTED_HOST) {
-                    handler.proceed()   // 只放行我們自己這台已知的伺服器
+                if (host == AppConfig.getServerIp(this@MainActivity)) {
+                    handler.proceed()
                 } else {
-                    handler.cancel()    // 其他網域一律照正常規則擋掉
+                    handler.cancel()
                     Toast.makeText(
                         this@MainActivity,
                         "不受信任的網站，已阻擋：$host",
@@ -92,10 +137,41 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        webView.loadUrl(AppConfig.START_URL)
+        loadServerUrl()
     }
 
-    // 讓實體返回鍵在網頁瀏覽記錄裡「上一頁」，而不是直接關閉 App
+    private fun loadServerUrl() {
+        webView.loadUrl(AppConfig.buildUrl(this))
+    }
+
+    private fun showServerSettingDialog() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT
+            setText(AppConfig.getServerIp(this@MainActivity))
+            hint = "例如 10.41.40.38"
+        }
+        val padding = (16 * resources.displayMetrics.density).toInt()
+        val container = FrameLayout(this).apply {
+            setPadding(padding, padding, padding, 0)
+            addView(input)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("伺服器 IP 設定")
+            .setMessage("目前連線：${AppConfig.buildUrl(this)}")
+            .setView(container)
+            .setPositiveButton("儲存並重新連線") { _, _ ->
+                val newIp = input.text.toString().trim()
+                if (newIp.isNotEmpty()) {
+                    AppConfig.setServerIp(this, newIp)
+                    Toast.makeText(this, "已切換到 $newIp，重新連線中...", Toast.LENGTH_SHORT).show()
+                    loadServerUrl()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK && webView.canGoBack()) {
             webView.goBack()
